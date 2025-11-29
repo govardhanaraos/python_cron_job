@@ -11,12 +11,20 @@ from datetime import datetime
 # --- CONFIGURATION ---
 # Connection String (Best practice: Set this in Render Environment Variables)
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://govardhanaraofmuser:Retail546321987@ac-1iddvrw-shard-00-00.mihjnbk.mongodb.net:27017,ac-1iddvrw-shard-00-01.mihjnbk.mongodb.net:27017,ac-1iddvrw-shard-00-02.mihjnbk.mongodb.net:27017/?ssl=true&authSource=admin&replicaSet=atlas-w63i5e-shard-0")
+
+#os.getenv("MONGO_URI")
+
 DB_NAME = "GRRadio"  # Change to your actual DB name
 CONFIG_COLLECTION = "app_settings"  # Collection to fetch the 'q' value (e.g., 'india')
 TARGET_COLLECTION = "radio_garden_channels"
 AUDIT_LOG_COLLECTION = "app_audit_log" # New requirement
 
 # --- CUSTOM MONGODB LOGGING HANDLER ---
+if not MONGO_URI:
+    # Use standard print/logging before MongoClient is initialized
+    print("FATAL ERROR: MONGO_URI environment variable is not set.")
+    logging.info("FATAL ERROR: MONGO_URI environment variable is not set.")
+    sys.exit(1) # Ensure the job fails and exits
 
 class MongoHandler(logging.Handler):
     """
@@ -136,11 +144,47 @@ def extract_channel_id_from_url(url_path):
     except Exception:
         return None
 
+# --- NEW FUNCTION TO RESOLVE REDIRECT ---
+def get_final_stream_url(initial_url, channel_id):
+    """
+    Executes a HEAD request on the initial stream URL to follow the 302 redirect
+    and extract the final, playable stream URL from the 'location' header.
+    
+    Returns the final URL or the initial URL if resolution fails.
+    """
+    headers = {
+        # Mimicking browser to ensure successful stream resolution
+        "Accept": "*/*",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+    }
+    
+    try:
+        # Use HEAD request and prevent automatic redirects
+        resp = requests.head(initial_url, headers=headers, allow_redirects=False, timeout=10)
+        
+        # Check for 302 Found status code
+        if resp.status_code == 302:
+            final_url = resp.headers.get("location") # Extract the location header 
+            if final_url:
+                logging.info(f"Resolved stream URL for {channel_id}: {final_url}")
+                return final_url
+            else:
+                logging.warning(f"302 status but no 'location' header for {channel_id}. Falling back to initial URL.")
+        else:
+            logging.warning(f"Unexpected status code {resp.status_code} for {channel_id}. Falling back to initial URL.")
+            
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to resolve final stream URL for {channel_id}: {e}")
+        
+    # Fallback to the initial, unredirected URL
+    return initial_url
+
 # --- PROCESS HANDLERS ---
 
 def create_channel_doc(page, channel_unique_id):
     """
     Helper to construct the final MongoDB document structure, including the new 'page' slug.
+    Now also resolves the final stream URL.
     """
     custom_id = get_deterministic_id(channel_unique_id)
     
@@ -150,8 +194,12 @@ def create_channel_doc(page, channel_unique_id):
     place = page.get("place", {}).get("title", "")
     country = page.get("country", {}).get("title", "")
     
-    # Construct the stream and logo URLs
-    stream_url = f"https://radio.garden/api/ara/content/listen/{channel_unique_id}/channel.mp3"
+    # Construct the initial stream URL
+    initial_stream_url = f"https://radio.garden/api/ara/content/listen/{channel_unique_id}/channel.mp3"
+    
+    # RESOLVE THE FINAL STREAM URL (New requirement)
+    final_stream_url = get_final_stream_url(initial_stream_url, channel_unique_id)
+    
     logo_url = f"https://picsum.photos/150/150?random={custom_id}"
 
     # Construct the 'page' slug (new requirement)
@@ -160,7 +208,7 @@ def create_channel_doc(page, channel_unique_id):
     return {
         "id": custom_id,
         "name": title,
-        "streamUrl": stream_url,
+        "streamUrl": final_stream_url, # Using the resolved URL
         "logoUrl": logo_url,
         "language": subtitle, 
         "genre": subtitle,
@@ -311,7 +359,7 @@ def main_job():
 
 if __name__ == "__main__":
     # OPTION B SCHEDULER CHECK (Ensures job runs only on 10th-day intervals)
-    if should_run_job():
+    #if should_run_job():
         try:
             main_job()
         except Exception as e:
@@ -319,7 +367,7 @@ if __name__ == "__main__":
             print(f"FATAL ERROR: An unexpected error occurred during job execution: {e}")
             logging.error(f"An unexpected error occurred during job execution: {e}")
             sys.exit(1)
-    else:
+    #else:
         # If the day condition is not met, exit gracefully
-        print("Scheduler Condition Not Met. Skipping execution for today.")
-        sys.exit(0)
+     #   print("Scheduler Condition Not Met. Skipping execution for today.")
+      #  sys.exit(0)
