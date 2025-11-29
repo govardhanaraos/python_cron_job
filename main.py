@@ -10,9 +10,7 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 # Connection String (Best practice: Set this in Render Environment Variables)
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://govardhanaraofmuser:Retail546321987@ac-1iddvrw-shard-00-00.mihjnbk.mongodb.net:27017,ac-1iddvrw-shard-00-01.mihjnbk.mongodb.net:27017,ac-1iddvrw-shard-00-02.mihjnbk.mongodb.net:27017/?ssl=true&authSource=admin&replicaSet=atlas-w63i5e-shard-0")
-
-#os.getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGO_URI")
 
 DB_NAME = "GRRadio"  # Change to your actual DB name
 CONFIG_COLLECTION = "app_settings"  # Collection to fetch the 'q' value (e.g., 'india')
@@ -326,22 +324,49 @@ def process_search(db, task):
         
     logging.info(f"--- Finished processing for {search_type}: '{search_term}' ---")
 
+def setup_fallback_logging():
+    """Setup file-based logging when MongoDB is unavailable"""
+    log_file = '/home/govardhanarao/app_audit.log'
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
 # --- EXECUTION ENTRY POINT ---
 
 def main_job():
     """
     Main function for the scheduled job.
     """
+
     try:
         # Establish MongoDB connection once
-        mongo_client = MongoClient(MONGO_URI)
+        mongo_client =MongoClient(
+            MONGO_URI,
+            connectTimeoutMS=30000,
+            socketTimeoutMS=30000,
+            serverSelectionTimeoutMS=30000
+        )
+
+        # Test the connection immediately
+        mongo_client.admin.command('ismaster')
         
         # Setup logging to console AND MongoDB
         setup_logging(mongo_client)
         
     except Exception as e:
-        # Cannot proceed without a database connection for logging
-        print(f"FATAL ERROR: Could not connect to MongoDB. Cannot start job. Error: {e}")
+        error_msg = f"FATAL ERROR: Could not connect to MongoDB. Error: {e}"
+        print(error_msg)
+
+        # USE FALLBACK LOGGING HERE
+        setup_fallback_logging()
+        logging.error(error_msg)
+        # Fallback to file logging since MongoDB is unavailable
+        with open('/home/govardhanarao/error.log', 'a') as f:
+            f.write(f"{datetime.now()} - {error_msg}\n")
         sys.exit(1)
 
     db = mongo_client[DB_NAME]
@@ -364,9 +389,21 @@ if __name__ == "__main__":
             main_job()
         except Exception as e:
             # Catching any remaining unexpected errors
-            print(f"FATAL ERROR: An unexpected error occurred during job execution: {e}")
-            logging.error(f"An unexpected error occurred during job execution: {e}")
-            sys.exit(1)
+            error_msg = f"FATAL ERROR: An unexpected error occurred during job execution: {e}"
+            print(error_msg)
+
+            # Try to log using fallback logging
+            try:
+                setup_fallback_logging()
+                logging.error(error_msg)
+            except:
+                # If even fallback logging fails, just print
+                print("Fallback logging also failed")
+
+            # Always write to error log file
+            with open('/home/govardhanarao/error.log', 'a') as f:
+                f.write(f"{datetime.now()} - {error_msg}\n")
+                sys.exit(1)
     #else:
         # If the day condition is not met, exit gracefully
      #   print("Scheduler Condition Not Met. Skipping execution for today.")
