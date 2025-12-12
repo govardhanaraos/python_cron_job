@@ -10,7 +10,9 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 # Connection String (Best practice: Set this in Render Environment Variables)
-MONGO_URI = os.getenv("MONGO_URI")
+#MONGO_URI = os.getenv("MONGO_URI")
+MONGO_URI = "mongodb://govardhanaraofmuser:Retail546321987@ac-1iddvrw-shard-00-00.mihjnbk.mongodb.net:27017,ac-1iddvrw-shard-00-01.mihjnbk.mongodb.net:27017,ac-1iddvrw-shard-00-02.mihjnbk.mongodb.net:27017/?ssl=true&authSource=admin&replicaSet=atlas-w63i5e-shard-0"
+
 
 DB_NAME = "GRRadio"  # Change to your actual DB name
 CONFIG_COLLECTION = "app_settings"  # Collection to fetch the 'q' value (e.g., 'india')
@@ -114,7 +116,7 @@ def get_search_queries(db):
     # 1. Fetch Country Searches
     country_cursor = db[CONFIG_COLLECTION].find({"config_name": "radio_search"})
     tasks = [
-        {"type": "country", "query": doc["query"]} 
+        {"type": "country", "query": doc["query"], "language": doc.get("language")}
         for doc in country_cursor if "query" in doc and doc["query"]
     ]
     
@@ -210,13 +212,13 @@ def create_channel_doc(page, channel_unique_id, task):
         clean_and_slugify(place),
         clean_and_slugify(country)
     ]
-    
+    #print(f"config_language : {config_language}")
     # Add config language to slug if it exists
     if config_language:
         page_slug_parts.append(clean_and_slugify(config_language))
         
     page_slug = "-".join(filter(None, page_slug_parts)) # Join parts, filtering out empty strings
-
+    #print(f"page_slug: {page_slug}")
     
     return {
         "id": custom_id,
