@@ -121,7 +121,7 @@ def get_search_queries(db):
     # 2. Fetch Place Searches
     place_cursor = db[CONFIG_COLLECTION].find({"config_name": "radio_search_by_place"})
     tasks.extend([
-        {"type": "place", "query": doc["query"], "country": doc.get("country")} 
+        {"type": "place", "query": doc["query"], "country": doc.get("country"), "language": doc.get("language")}
         for doc in place_cursor 
         if "query" in doc and doc["query"] and doc.get("country")
     ])
@@ -179,10 +179,10 @@ def get_final_stream_url(initial_url, channel_id):
 
 # --- PROCESS HANDLERS ---
 
-def create_channel_doc(page, channel_unique_id):
+def create_channel_doc(page, channel_unique_id, task):
     """
     Helper to construct the final MongoDB document structure, including the new 'page' slug.
-    Now also resolves the final stream URL.
+    Now also resolves the final stream URL and includes 'configLanguage' from the task.
     """
     custom_id = get_deterministic_id(channel_unique_id)
     
@@ -192,6 +192,9 @@ def create_channel_doc(page, channel_unique_id):
     place = page.get("place", {}).get("title", "")
     country = page.get("country", {}).get("title", "")
     
+    # Extract language from the task config (only available for 'place' searches)
+    config_language = task.get("language", "")
+    
     # Construct the initial stream URL
     initial_stream_url = f"https://radio.garden/api/ara/content/listen/{channel_unique_id}/channel.mp3"
     
@@ -200,8 +203,20 @@ def create_channel_doc(page, channel_unique_id):
     
     logo_url = f"https://picsum.photos/150/150?random={custom_id}"
 
-    # Construct the 'page' slug (new requirement)
-    page_slug = f"{clean_and_slugify(title)}-{clean_and_slugify(subtitle)}-{clean_and_slugify(place)}-{clean_and_slugify(country)}"
+    # Construct the 'page' slug (new requirement + including configLanguage for uniqueness)
+    page_slug_parts = [
+        clean_and_slugify(title),
+        clean_and_slugify(subtitle),
+        clean_and_slugify(place),
+        clean_and_slugify(country)
+    ]
+    
+    # Add config language to slug if it exists
+    if config_language:
+        page_slug_parts.append(clean_and_slugify(config_language))
+        
+    page_slug = "-".join(filter(None, page_slug_parts)) # Join parts, filtering out empty strings
+
     
     return {
         "id": custom_id,
@@ -216,9 +231,10 @@ def create_channel_doc(page, channel_unique_id):
         "page": page_slug, # The new required field
     }
 
-def fetch_and_parse_content(db, content_url, search_term):
+def fetch_and_parse_content(db, content_url, search_term, task):
     """
     Fetches content from the content API and performs the bulk write.
+    Modified to accept the 'task' object.
     """
     logging.info(f"Fetching content from: {content_url}")
     
@@ -246,8 +262,8 @@ def fetch_and_parse_content(db, content_url, search_term):
                     if not channel_unique_id:
                         continue
                     
-                    # Create the full channel document
-                    channel_doc = create_channel_doc(page, channel_unique_id)
+                    # Create the full channel document, passing the task
+                    channel_doc = create_channel_doc(page, channel_unique_id, task)
 
                     # Create Upsert Operation (Update if exists, Insert if new)
                     operations.append(
@@ -318,9 +334,9 @@ def process_search(db, task):
         logging.warning(f"No matching {search_type} page found for query '{search_term}'. Check DB config/API response.")
         return
 
-    # 3. Construct the Content URL and Fetch/Parse
+    # 3. Construct the Content URL and Fetch/Parse, passing the task
     content_url = f"https://radio.garden/api/ara/content/page/{extract_channel_id_from_url(content_url_suffix)}?s=1&hl=en"
-    fetch_and_parse_content(db, content_url, search_term)
+    fetch_and_parse_content(db, content_url, search_term, task)
         
     logging.info(f"--- Finished processing for {search_type}: '{search_term}' ---")
 
